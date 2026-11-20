@@ -15,17 +15,21 @@
 const fs = require('fs');
 const path = require('path');
 const mgu = require('./kit/mgu');
+const G = require('./kit/gauges');
+const { withAlpha } = require('./kit/canvas');
 const M = require('./model');
+const S = require('./stats');
 const WORDS = require('./words');
 
 const W = 1600, H = 520;
 
 /* ---------- layout ---------- */
+const TOP = 44;                                           // below the tab bar (the kit's G.TOP)
 const TILE = 70, GAP = 10;
-const BOARD_X = 130, BOARD_Y = 25;
+const BOARD_X = 130, BOARD_Y = TOP;
 const BOARD_W = 5 * TILE + 4 * GAP;                       // 390
 const KB_X = 620, KB_W = 900, KB_GAP = 8, KEY_H = 70, ROW_GAP = 12;
-const KB_Y = Math.round((H - (3 * KEY_H + 2 * ROW_GAP)) / 2);
+const KB_Y = TOP + Math.round((H - TOP - (3 * KEY_H + 2 * ROW_GAP)) / 2);
 const KB_ROWS = [
     ['E', 'Ę', 'Ė', 'R', 'T', 'Y', 'U', 'Ų', 'Ū', 'I', 'Į', 'O', 'P'],
     ['A', 'Ą', 'S', 'Š', 'D', 'F', 'G', 'H', 'J', 'K', 'L'],
@@ -49,7 +53,7 @@ KB_ROWS.forEach((row, r) => {
 /* ---------- palette (zodlys' light + dark, kit-local hex) ---------- */
 const PAL = {
     light: {
-        bg: '#ffffff', text: '#000000', dim: '#6b7280',
+        bg: '#ffffff', text: '#000000', dim: '#6b7280', sel: '#1d4ed8',
         tile: {
             win:     { bg: '#15803d', text: '#000000' },
             correct: { bg: '#1d4ed8', text: '#000000' },
@@ -68,7 +72,7 @@ const PAL = {
         overlay: '#ffffff', overlayLine: '#e5e7eb',
     },
     dark: {
-        bg: '#18181b', text: '#f4f4f5', dim: '#a1a1aa',
+        bg: '#18181b', text: '#f4f4f5', dim: '#a1a1aa', sel: '#3b82f6',
         tile: {
             win:     { bg: '#6ee7b7', text: '#18181b' },
             correct: { bg: '#93c5fd', text: '#18181b' },
@@ -108,15 +112,32 @@ mgu.run({
                 const s = JSON.parse(fs.readFileSync(FILE, 'utf8'));
                 if (s.day === day) {
                     log.info('carrying on: ' + s.guesses.filter((g) => g).length + ' guesses in');
-                    return new M.Game({ solution: solution, hardMode: !!settings.get('hardMode'), guesses: s.guesses });
+                    return new M.Game({ solution: solution, hardMode: !!settings.get('hardMode'), guesses: s.guesses, words: WORDS.wordListAll });
                 }
             } catch (e) { /* first start or a new day */ }
-            return new M.Game({ solution: solution, hardMode: !!settings.get('hardMode') });
+            return new M.Game({ solution: solution, hardMode: !!settings.get('hardMode'), words: WORDS.wordListAll });
         }
         function save() {
             try {
                 fs.writeFileSync(FILE, JSON.stringify({ day: day, guesses: game.guesses, won: game.won }));
             } catch (e) { log.warn('save: ' + e); }
+        }
+
+        /* ---------- statistics: one entry per finished game, as the website keeps them ---------- */
+        const STATS_FILE = path.join(dataDir, 'stats.json');
+        let statistics = [];
+        try {
+            const s = JSON.parse(fs.readFileSync(STATS_FILE, 'utf8'));
+            if (Array.isArray(s.stats)) statistics = s.stats;
+        } catch (e) { /* none yet */ }
+        function saveStats() {
+            try {
+                fs.writeFileSync(STATS_FILE, JSON.stringify({ stats: statistics }));
+            } catch (e) { log.warn('saveStats: ' + e); }
+        }
+        function addStatistic(stat) {
+            statistics.push(stat);
+            saveStats();
         }
 
         /* ---------- drawing ---------- */
@@ -150,6 +171,9 @@ mgu.run({
                 const size = key.k === 'Enter' || key.k === 'Del' ? 20 : 26;
                 cv.roundRect(key.x, key.y, key.w, key.h, 5, st.bg);
                 cv.text(label, key.x + key.w / 2, key.y + key.h / 2 + size * 0.36, size, st.text, { font: 'bold', align: 'center' });
+                // a focusable target: the wheel controller reaches the keyboard, press presses the key
+                // (the kit draws the focus ring and the press flash over the target)
+                cv.target(key.x, key.y, key.w, key.h, () => press(key.k), 'key:' + key.k);
             });
         }
 
@@ -186,19 +210,26 @@ mgu.run({
             if (today !== day) {
                 day = today;
                 solution = M.dailyWord(WORDS.wordList);
-                game = new M.Game({ solution: solution, hardMode: !!settings.get('hardMode') });
+                game = new M.Game({ solution: solution, hardMode: !!settings.get('hardMode'), words: WORDS.wordListAll });
                 log.info('new day ' + day + ': ' + solution);
             }
             const t = PAL[settings.get('theme') === 'light' ? 'light' : 'dark'];
             const cv = ctx.canvas(W, H).clear(t.bg);
-            drawBoard(cv, t);
-            drawKeyboard(cv, t);
-            if (game.alert) drawAlert(cv, t);
-            if (game.over) drawResult(cv, t);
+            // the header's tabs: the game and the statistics, as pages (the kit draws the strip itself)
+            G.frame(cv, t, ['Žodlys', 'Statistika'], page, []);
+            if (page === 0) {
+                drawBoard(cv, t);
+                drawKeyboard(cv, t);
+                if (game.alert) drawAlert(cv, t);
+                if (game.over) drawResult(cv, t);
+            } else {
+                drawStats(cv, t);
+            }
             await ui.image('GAME_GFX', cv);
         }
 
         /* ---------- actions ---------- */
+        let page = 0;                                          // 0: the game, 1: the statistics
         let alertTimer = null;
         function alert(msg) {
             game.alert = msg;
@@ -207,10 +238,18 @@ mgu.run({
         }
 
         function press(k) {
+            if (page !== 0) return;                            // the game's keys only work on the game page
             if (k === 'Enter') {
                 const a = game.submit();
                 if (a) alert(a);
-                else { save(); if (game.over) resultTick(); }
+                else {
+                    // a finished game goes into the statistics: a win as its guess count, a loss on
+                    // the sixth guess as tries 0 (as the website records it)
+                    if (game.won) addStatistic({ date: new Date().toISOString(), tries: game.currentGuess + 1, won: true });
+                    else if (game.currentGuess >= 6) addStatistic({ date: new Date().toISOString(), tries: 0, won: false });
+                    save();
+                    if (game.over) resultTick();
+                }
             } else if (k === 'Del') {
                 game.backspace();
             } else {
@@ -219,12 +258,12 @@ mgu.run({
             render();
         }
 
-        // the result's countdown ticks every second while the game is over
+        // the result's countdown ticks every second while the game is over (the stats page's too)
         let resultTimer = null;
         function resultTick() {
             if (resultTimer) return;
             resultTimer = setInterval(() => {
-                if (!game.over) { clearInterval(resultTimer); resultTimer = null; return; }
+                if (!game.over && page !== 1) { clearInterval(resultTimer); resultTimer = null; return; }
                 render();
             }, 1000);
         }
@@ -233,6 +272,7 @@ mgu.run({
         let pressed = null;
         const keyAt = (x, y) => KEYS.find((k) => x >= k.x && x < k.x + k.w && y >= k.y && y < k.y + k.h) || null;
         ctx.onTouch((phase, x, y) => {
+            if (page !== 0) return false;                      // the stats page: the keyboard is not there
             if (phase === 1) {
                 pressed = keyAt(x, y);
                 return !!pressed;                    // a keyboard tile: the gesture is this app's
@@ -241,12 +281,64 @@ mgu.run({
                 if (pressed && keyAt(x, y) !== pressed) { pressed = null; render(); }
                 return !!pressed;
             }
-            if (pressed && keyAt(x, y) === pressed) { pressed = null; press(pressed.k); }
+            if (pressed && keyAt(x, y) === pressed) { const key = pressed; pressed = null; press(key.k); }
             else { pressed = null; render(); }
             return true;
         });
         ui.onClick('BTN_ENTER', () => press('Enter'));
         ui.onClick('BTN_DEL', () => press('Del'));
+
+        // the header's tabs switch the pages (the kit claims taps on the tabs itself)
+        ctx.onTab((i) => {
+            if (i === page) return;
+            page = i;
+            if (page === 1) resultTick();                      // the countdown ticks on the stats page too
+            render();
+        });
+
+        /* ---------- the statistics page (a page of its own, like the website's) ---------- */
+        function drawStats(cv, t) {
+            const stats = S.computeStatistics(statistics);
+            const tile = (x, y, w, h, value, label) => {
+                cv.roundRect(x, y, w, h, 14, withAlpha('#ffffff', 0.06));
+                cv.text(String(value), x + w / 2, y + h / 2 - 8, 46, t.tile.correct.bg, { align: 'center', font: 'bold' });
+                cv.text(label, x + w / 2, y + h / 2 + 32, 18, t.dim, { align: 'center', font: 'label', spacing: 1.5 });
+            };
+            const X = 60, Y = 76, TW = 330, TH = 120, TG = 20;
+            tile(X, Y, TW, TH, stats.played, 'ŽAISTA');
+            tile(X + (TW + TG), Y, TW, TH, stats.winRate + '%', 'LAIMĖTA %');
+            tile(X + 2 * (TW + TG), Y, TW, TH, stats.currentStreak, 'SERIJA');
+            tile(X + 3 * (TW + TG), Y, TW, TH, stats.maxStreak, 'ILGIAUSIA SERIJA');
+
+            // distribution of wins by guess count: the bar's width is the count's share
+            cv.text('PASISKIRSTYMAS PAGAL BANDYMUS', X, Y + TH + 48, 20, t.dim, { font: 'bold', spacing: 1.5 });
+            const barsY = Y + TH + 64, barH = 34, barGap = 8, maxBar = Math.max(...stats.distribution, 1);
+            for (let i = 0; i < 6; i++) {
+                const y = barsY + i * (barH + barGap);
+                cv.text(String(i + 1), X + 14, y + barH / 2 + 8, 22, t.dim, { align: 'center', font: 'bold' });
+                const w = stats.distribution[i] === 0 ? 60 : Math.round((stats.distribution[i] / maxBar) * 900);
+                const hl = stats.lastWinTries === i + 1;
+                cv.roundRect(X + 40, y, w, barH, 8, hl ? t.tile.win.bg : withAlpha('#ffffff', 0.12));
+                cv.text(String(stats.distribution[i]), X + 40 + w - 14, y + barH / 2 + 8, 22, hl ? '#000000' : t.text, { align: 'center', font: 'bold' });
+            }
+
+            // average and best, right of the bars
+            const RX = 1050, RW = 490;
+            tile(RX, barsY, RW / 2 - 10, TH, stats.avgTries ? stats.avgTries.toFixed(1) : '—', 'VIDUTINIŠKAI BANDYMŲ');
+            tile(RX + RW / 2 + 10, barsY, RW / 2 - 10, TH, stats.bestTries || '—', 'GERIAUSIAS REZULTATAS');
+
+            // the last games: won as its try count, lost as X
+            if (stats.recent.length) {
+                cv.text('PASKUTINIAI ŽAIDIMAI', RX, barsY + TH + 48, 20, t.dim, { font: 'bold', spacing: 1.5 });
+                stats.recent.forEach((g, i) => {
+                    const sq = 52, sx = RX + i * (sq + 10), sy = barsY + TH + 64;
+                    cv.roundRect(sx, sy, sq, sq, 10, g.won ? t.tile.win.bg : withAlpha('#ffffff', 0.12));
+                    cv.text(g.won ? String(g.tries) : 'X', sx + sq / 2, sy + sq / 2 + 9, 24, g.won ? '#000000' : t.text, { align: 'center', font: 'bold' });
+                });
+            }
+
+            cv.text('Kitas žodis po ' + untilMidnight(), W / 2, 486, 22, t.dim, { align: 'center', font: 'label' });
+        }
 
         settings.onChange((k) => {
             if (k === 'hardMode') game.hardMode = !!settings.get('hardMode');

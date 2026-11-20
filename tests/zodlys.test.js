@@ -218,6 +218,76 @@ test('a game restored from saved guesses plays on', () => {
     assert.strictEqual(g.currentGuess, 3);
 });
 
+/* ---------- statistics (stats.js, ported from zodlys' helpers/statistics.ts) ---------- */
+
+const S = require('../apps/larryare_zodlys/stats');
+const stat = (date, tries, won) => ({ date, tries, won });
+
+test('statistics: no games yet', () => {
+    const s = S.computeStatistics([]);
+    assert.strictEqual(s.played, 0);
+    assert.strictEqual(s.winRate, 0);
+    assert.strictEqual(s.currentStreak, 0);
+    assert.strictEqual(s.maxStreak, 0);
+    assert.deepStrictEqual(s.distribution, [0, 0, 0, 0, 0, 0]);
+    assert.strictEqual(s.avgTries, 0);
+    assert.strictEqual(s.bestTries, 0);
+    assert.strictEqual(s.lastWinTries, null);
+    assert.deepStrictEqual(s.recent, []);
+});
+
+test('statistics: played, win rate and counts', () => {
+    const s = S.computeStatistics([
+        stat('2026-01-01T10:00:00Z', 3, true),
+        stat('2026-01-02T10:00:00Z', 0, false),
+        stat('2026-01-03T10:00:00Z', 5, true),
+    ]);
+    assert.strictEqual(s.played, 3);
+    assert.strictEqual(s.wins, 2);
+    assert.strictEqual(s.winRate, 67);                   // round(2/3 * 100)
+});
+
+test('statistics: current streak counts from the end and stops at a loss', () => {
+    assert.strictEqual(S.computeStatistics([stat('a', 2, true), stat('b', 3, true), stat('c', 4, true)]).currentStreak, 3);
+    assert.strictEqual(S.computeStatistics([stat('a', 2, true), stat('b', 0, false), stat('c', 4, true)]).currentStreak, 1);
+    assert.strictEqual(S.computeStatistics([stat('a', 0, false), stat('b', 0, false)]).currentStreak, 0);
+});
+
+test('statistics: max streak is the longest run of wins', () => {
+    assert.strictEqual(S.computeStatistics([stat('a', 2, true), stat('b', 0, false), stat('c', 1, true), stat('d', 1, true), stat('e', 1, true)]).maxStreak, 3);
+    assert.strictEqual(S.computeStatistics([stat('a', 0, false)]).maxStreak, 0);
+});
+
+test('statistics: distribution counts wins by guess count', () => {
+    const s = S.computeStatistics([
+        stat('a', 1, true), stat('b', 3, true), stat('c', 3, true),
+        stat('d', 0, false),                                // a loss is not in the distribution
+        stat('e', 6, true),
+    ]);
+    assert.deepStrictEqual(s.distribution, [1, 0, 2, 0, 0, 1]);
+});
+
+test('statistics: average and best tries across wins', () => {
+    const s = S.computeStatistics([stat('a', 2, true), stat('b', 5, true), stat('c', 3, true)]);
+    assert.strictEqual(s.avgTries, 10 / 3);
+    assert.strictEqual(s.bestTries, 2);
+    assert.strictEqual(S.computeStatistics([stat('a', 0, false)]).avgTries, 0);
+    assert.strictEqual(S.computeStatistics([stat('a', 0, false)]).bestTries, 0);
+});
+
+test('statistics: lastWinTries highlights the newest win; recent keeps the last 10', () => {
+    const many = [];
+    for (let i = 0; i < 15; i++) many.push(stat('2026-01-01T00:00:' + String(i).padStart(2, '0') + 'Z', (i % 6) + 1, true));
+    const s = S.computeStatistics(many);
+    assert.strictEqual(s.lastWinTries, 3);               // the newest win: i=14 -> 14%6+1
+    assert.strictEqual(s.recent.length, 10);
+    assert.strictEqual(s.recent[0].date, '2026-01-01T00:00:05Z');
+    assert.strictEqual(s.recent[9].date, '2026-01-01T00:00:14Z');
+    // unsorted input is sorted by date first
+    const shuffled = [stat('2026-01-03T10:00:00Z', 2, true), stat('2026-01-01T10:00:00Z', 3, true)];
+    assert.deepStrictEqual(S.computeStatistics(shuffled).recent.map((g) => g.date), ['2026-01-01T10:00:00Z', '2026-01-03T10:00:00Z']);
+});
+
 /* ---------- run ---------- */
 
 let failed = 0;
