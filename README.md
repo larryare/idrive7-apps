@@ -1,6 +1,8 @@
 # Larryare's iDrive apps
 
-Custom apps for the BMW MGU head unit (iDrive 7), built with the [idrive7-apps kit](https://github.com/cauliflowermossgrape/idrive7-apps) — vendored here as `kit/` with the OAP SDK (`oap-sdk/`). Apps live in `apps/<id>/`, each with `app.json` (manifest), `main.js` (the UI), the game/app logic in its own module, and tests in `tests/`.
+Custom apps for the BMW MGU head unit (iDrive 7), built with the [idrive7-apps kit](https://github.com/cauliflowermossgrape/idrive7-apps) — vendored here as `kit/`. Apps live in `apps/<id>/`, each with `app.json` (manifest), `main.js` (the UI), the game/app logic in its own module, and tests in `tests/`.
+
+The BMW OAP SDK (`oap-sdk/`) is **not in this repository** — extract it from your own head unit with `kit/tools/extract_sdk.js` after installing the kit's runtime there, or take it from the upstream kit's instructions. It is proprietary BMW code and must not be published.
 
 ## Apps
 
@@ -20,7 +22,7 @@ Custom apps for the BMW MGU head unit (iDrive 7), built with the [idrive7-apps k
 
 ## Build from source
 
-The kit and the OAP SDK are vendored. Words are extracted from the upstream game:
+The kit is vendored. Words are extracted from the upstream game:
 
 ```
 node tools/extract_words.js /path/to/zodlys/src/app/wordList.tsx apps/larryare_zodlys/words.js

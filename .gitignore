@@ -5,3 +5,4 @@ node_modules/
 release_notes.md
 __pycache__/
 *.pyc
+oap-sdk/
