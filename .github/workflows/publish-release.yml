@@ -1,0 +1,38 @@
+name: Publish Release
+
+# Publishes a draft release made by "Prepare Draft Release" (the same as its "Publish release" button).
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to publish (e.g. v1.5.7)'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Publish the draft
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.event.inputs.tag }}
+        run: |
+          gh release view "$TAG" --json isDraft,name
+          gh release edit "$TAG" --draft=false --latest
+          gh release view "$TAG" --json isDraft,url,publishedAt
+
+      # a release published with this workflow's token starts no other workflow (retire-on-publish.yml
+      # doesn't run), so the older releases are retired here
+      - name: Retire the older releases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.event.inputs.tag }}
+        run: tools/retire_older_releases.sh "$TAG"

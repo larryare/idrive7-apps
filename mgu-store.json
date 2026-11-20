@@ -1,0 +1,10 @@
+{
+  "apps": {
+    "larryare_zodlys": {
+      "title": "\u017dodlys",
+      "description": "\u017dodlys - the Lithuanian daily word game, on the iDrive. Guess the five-letter word of the day in six tries.",
+      "author": "custom",
+      "icon": "larryare_zodlys.png"
+    }
+  }
+}
